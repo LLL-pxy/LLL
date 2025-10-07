@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Detect changed files and enforce main.py-only (compare with appropriate base)
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          # Skip changed files check for the upstream repository
+          if [ "${GITHUB_REPOSITORY}" = "unnc-aim/aim-py-2526-courseworks" ]; then
+            echo "# Tests" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Files changed" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⏭️ Skipped for upstream repository (${GITHUB_REPOSITORY})" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Status: ⏭️ Skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # determine current branch name (fallback if GITHUB_REF_NAME not set)
+          CURRENT_BRANCH="${GITHUB_REF_NAME:-${GITHUB_REF#refs/heads/}}"
+
+          # Compute the repository's first (root) commit and compare against it so that
+          # changes are always reported relative to the initial project state.
+          if git rev-list --max-parents=0 HEAD >/dev/null 2>&1; then
+            INITIAL_COMMIT="$(git rev-list --max-parents=0 HEAD | tail -n1)"
+            BASE_REF="${INITIAL_COMMIT}"
+          else
+            # fallback: if we can't find the root commit (very shallow checkout),
+            # compare with latest origin/main as a safe default.
+            git fetch --no-tags --prune --depth=1 origin main >/dev/null 2>&1 || true
+            BASE_REF="origin/main"
+          fi
+
+          CHANGED_FILES="$(git diff --name-only ${BASE_REF}...HEAD || true)"
+          echo "# Tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Files changed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${CHANGED_FILES}" ]; then
+            echo "No changed files detected; nothing to check." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' "${CHANGED_FILES}" | awk 'NR==1 && NF==0{next} {print}' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          DISALLOWED_LIST=()
+          for f in ${CHANGED_FILES}; do
+            # Allow edits to top-level main.py (legacy) and any files inside src/main/
+            case "${f}" in
+              main.py|src/main/*)
+                # allowed
+                ;;
+              *)
+                DISALLOWED_LIST+=("${f}")
+                ;;
+            esac
+          done
+
+          if [ ${#DISALLOWED_LIST[@]} -gt 0 ]; then
+            echo "### Disallowed modifications" >> "$GITHUB_STEP_SUMMARY"
+            echo 'The workflow only permits changes to `main.py` or files under `src/main/`, but disallowed modification(s) detected in these files:' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' "${DISALLOWED_LIST[@]}" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ Disallowed modification(s) detected." >> "$GITHUB_STEP_SUMMARY"
+            printf 'Disallowed modification(s) detected: %s\n' "${DISALLOWED_LIST[*]}" >&2
+            exit 1
+          else 
+            echo "- Status: ✅ Passed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install autopep8 pytest
+
+      - name: Run checks and write job summary
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          # helper: append a titled block to the GitHub Actions job summary
+          append_summary() {
+            local title="$1"
+            local status="$2"
+            local file="$3"
+            echo "## ${title}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Status: ${status}" >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "${file}" ] && [ -s "${file}" ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              sed -n '1,500p' "${file}" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          FAIL=0
+
+          # (Changed-files check already performed earlier.)
+
+          # Syntax check: prefer package file under src/main, fall back to top-level main.py
+          SYNTAX_OUT="/tmp/syntax.txt"
+          if [ -f src/main/__init__.py ]; then
+            python -m py_compile src/main/__init__.py 2>"${SYNTAX_OUT}" || true
+          else
+            python -m py_compile main.py 2>"${SYNTAX_OUT}" || true
+          fi
+          if [ -s "${SYNTAX_OUT}" ]; then
+            append_summary "Syntax check" "❌ Failed" "${SYNTAX_OUT}"
+            FAIL=1
+          else
+            append_summary "Syntax check" "✅ Passed"
+            rm -f "${SYNTAX_OUT}"
+          fi
+
+          # autopep8 style diff: check the package file if present, else top-level main.py
+          APEP8_OUT="/tmp/autopep8.txt"
+          if [ -f src/main/__init__.py ]; then
+            autopep8 --diff src/main/__init__.py >"${APEP8_OUT}" || true
+          else
+            autopep8 --diff main.py >"${APEP8_OUT}" || true
+          fi
+          if [ -s "${APEP8_OUT}" ]; then
+            append_summary "autopep8 (style)" "❌ Issues" "${APEP8_OUT}"
+            FAIL=1
+          else
+            append_summary "autopep8 (style)" "✅ Passed"
+            rm -f "${APEP8_OUT}"
+          fi
+
+          # pytest
+          PYTEST_OUT="/tmp/pytest.txt"
+          if [ "${GITHUB_REPOSITORY}" = "unnc-aim/aim-py-2526-courseworks" ]; then
+            append_summary "pytest" "⏭️ Skipped for upstream repository"
+          elif [ -d src/tests ]; then
+            pytest -q src/tests/ >"${PYTEST_OUT}" 2>&1 || true
+            if [ -s "${PYTEST_OUT}" ] && grep -Eqi 'failed|error|FAILED|ERROR' "${PYTEST_OUT}" 2>/dev/null; then
+              append_summary "pytest" "❌ See details" "${PYTEST_OUT}"
+              FAIL=1
+            else
+              append_summary "pytest" "✅ Passed" "${PYTEST_OUT}"
+              rm -f "${PYTEST_OUT}"
+            fi
+          else
+            append_summary "pytest" "⏭️ Skipped (no src/tests/ directory)"
+          fi
+
+          SUBMIT_URL="https://forms.office.com/r/iveyDHB7Zp"
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # determine current branch name (fallback if GITHUB_REF_NAME not set)
+          CURRENT_BRANCH="${GITHUB_REF_NAME:-${GITHUB_REF#refs/heads/}}"
+
+          if [ "${FAIL}" -ne 0 ]; then
+            echo "## ❌ One or more checks failed. See job summary above for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "If you want to give up, you may copy [this link (hover and copy link)](${RUN_URL}) and submit it together with your name and student ID to our assignment questionnaire:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- <${SUBMIT_URL}>" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Otherwise keep trying ;)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Action run URL: ${RUN_URL}"
+            exit 1
+          else
+            if [ "${CURRENT_BRANCH}" = "main" ]; then
+              echo "## 🎉 All checks passed." >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "# Submission" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "Please copy [this link (hover and copy link)](${RUN_URL}) and submit it together with your name and student ID to our assignment questionnaire:" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "- <${SUBMIT_URL}>" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "Action run URL: ${RUN_URL}"
+              exit 0
+            else
+              echo "## ✅ All checks passed on branch: ${CURRENT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "Note: runs on non-main branches will not be considered final submissions. If you need the final result, please merge into the main branch and view the run on the main branch." >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
