@@ -48,8 +48,8 @@ class Grid():
         y = int(value[1])
     
     # 应用边界约束
-        x = max(0, min(x, self.width - 1))
-        y = max(0, min(y, self.height - 1))
+        x = max(0, min(x, self.width))
+        y = max(0, min(y, self.height))
     
     # 更新位置
         self._current_pos = (x, y)
@@ -118,7 +118,7 @@ class Grid():
         如果找到敌人（机器人和敌人坐标一致），就返回true
         '''
         return self._current_pos == self.enemy_pos
-        pass  # TODO: Question 4
+        #pass  # TODO: Question 4
 
     def record_position(self, step: int) -> None:
         '''
