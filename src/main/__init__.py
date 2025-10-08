@@ -42,15 +42,15 @@ class Grid():
         """
         if not isinstance(value, tuple) or len(value) != 2:
             raise TypeError("Input must be a tuple of length 2")
-    
+
     # 类型转换和范围约束
         x = int(value[0])
         y = int(value[1])
-    
+
     # 应用边界约束
         x = max(0, min(x, self.width))
         y = max(0, min(y, self.height))
-    
+
     # 更新位置
         self._current_pos = (x, y)
         pass  # TODO: Question 1
@@ -63,7 +63,7 @@ class Grid():
         以右为X轴正方向，上为Y轴正方向
         '''
         x, y = self._current_pos
-        
+
         # 使用枚举值进行方向判断
         if self.current_direction == Facing.UP:
             y += 1
@@ -73,7 +73,7 @@ class Grid():
             y -= 1
         elif self.current_direction == Facing.LEFT:
             x -= 1
-        
+
         self.current_pos = (x, y)
         return self._current_pos
         pass  # TODO: Question 2
@@ -91,7 +91,7 @@ class Grid():
             new_dir = Facing.RIGHT
         else:  # RIGHT
             new_dir = Facing.UP
-        
+
         self.current_direction = new_dir
         return new_dir
         pass  # TODO: Question 3a
@@ -108,7 +108,7 @@ class Grid():
             new_dir = Facing.LEFT
         else:  # LEFT
             new_dir = Facing.UP
-        
+
         self.current_direction = new_dir
         return new_dir
         pass  # TODO: Question 3b
@@ -118,7 +118,7 @@ class Grid():
         如果找到敌人（机器人和敌人坐标一致），就返回true
         '''
         return self._current_pos == self.enemy_pos
-        #pass  # TODO: Question 4
+        # pass  # TODO: Question 4
 
     def record_position(self, step: int) -> None:
         '''
@@ -160,18 +160,20 @@ class Grid():
     返回：曼哈顿距离值
 
 """
+
+
 class AdvancedGrid(Grid):
     def __init__(self, width: int, height: int, enemy_pos: tuple):
         super().__init__(width, height, enemy_pos)
         self.steps: int = 0  # 移动步数计数器
-    
+
     def move_forward(self) -> Tuple[int, int]:
         # 调用父类移动方法
         new_pos = super().move_forward()
         # 更新步数
         self.steps += 1
         return new_pos
-    
+
     def distance_to_enemy(self) -> int:
         # 计算曼哈顿距离
         x1, y1 = self._current_pos
